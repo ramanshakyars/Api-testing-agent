@@ -1,0 +1,27 @@
+crewai==0.86.0
+crewai-tools==0.25.8
+streamlit==1.34.0
+streamlit-chat==0.1.1
+pandas==2.2.2
+numpy==1.26.4
+python-dotenv==1.0.0
+playwright==1.46.0
+
+
+# Activate your environment (if not already)
+#.\venv\Scripts\Activate.ps1
+
+# Upgrade pip
+#python -m pip install --upgrade pip
+
+# Install a compatible version of LiteLLM that avoids uvloop issue
+#pip install litellm==1.57.4
+
+# Install crewai without dependencies (to avoid pulling uvloop via its deps)
+#pip install crewai==0.86.0 --no-deps
+
+# Install crewai-tools
+#pip install crewai-tools==0.25.8
+
+# Now install rest of libraries
+#pip install streamlit==1.34.0 streamlit-chat==0.1.1 pandas==2.2.2 numpy==1.26.4 python-dotenv==1.0.0 playwright==1.46.0
