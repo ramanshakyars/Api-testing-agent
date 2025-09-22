@@ -25,3 +25,6 @@ playwright==1.46.0
 
 # Now install rest of libraries
 #pip install streamlit==1.34.0 streamlit-chat==0.1.1 pandas==2.2.2 numpy==1.26.4 python-dotenv==1.0.0 playwright==1.46.0
+# installstreamlit 
+#pip install streamlit==1.34.0
+
