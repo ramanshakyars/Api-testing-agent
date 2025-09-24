@@ -4,15 +4,14 @@ import yaml
 import json
 import re
 from urllib.parse import urlparse
-from crewai import Agent, Task, Crew , LLM
+from crewai import Agent, Task, Crew, LLM
 
 # ===========================
-# LLM Setup with Ollama
+# LLM Setup with CrewAI LLM
 # ===========================
-
 ollama_llm = LLM(
     model="ollama/codellama:7b",
-    base_url="http://localhost:11434"  # Default Ollama server
+    base_url="http://localhost:11434"
 )
 
 # ===========================
