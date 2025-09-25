@@ -64,7 +64,6 @@ def perform_login_test(email: str, password: str):
         try:
             data = resp.json()
             st.json(data)
-            print("Login API Response:", json.dumps(data, indent=2))
             if resp.status_code == 200:
                 token = data.get("token") or data.get("accessToken")
                 return True, token
@@ -171,6 +170,7 @@ if st.session_state.api_paths:
 
         # Step 2: Run CrewAI only after login
         if st.session_state.login_done and st.button("Run API Tests"):
+            # --- Agents ---
             planner_agent = Agent(
                 role="Planner",
                 goal="Decide execution order for APIs",
@@ -190,6 +190,7 @@ if st.session_state.api_paths:
                 llm=ollama_llm
             )
 
+            # --- Tasks ---
             plan_task = Task(
                 description=f"Order APIs logically: {st.session_state.api_paths[:20]}",
                 agent=planner_agent,
@@ -204,30 +205,57 @@ if st.session_state.api_paths:
                 context=[plan_task],
                 expected_output="Strict JSON array"
             )
-            report_task = Task(
-                description="Summarize execution results",
-                agent=reporter_agent,
-                context=[testcase_task],
-                expected_output="JSON summary"
-            )
 
+            # --- Run Planner + Testcase Generator ---
             crew = Crew(
-                agents=[planner_agent, testcase_agent, reporter_agent],
-                tasks=[plan_task, testcase_task, report_task],
+                agents=[planner_agent, testcase_agent],
+                tasks=[plan_task, testcase_task],
                 verbose=True,
             )
             results = crew.kickoff()
 
-            raw_testcases = results.get("Testcase Generator", "[]")
-            testcases = safe_json_parse(raw_testcases)
+            # --- Collect Outputs ---
+            def get_output_safe(task_output):
+    # Works across crewai versions
+             if hasattr(task_output, "output"):
+                return task_output.output
+             if hasattr(task_output, "final_output"):
+                return task_output.final_output
+             return str(task_output)
+            plan_output = get_output_safe(results.tasks_output[0])
+            testcase_output = get_output_safe(results.tasks_output[1])
 
+            # --- Parse Testcases ---
+            testcases = safe_json_parse(testcase_output)
             if not testcases:
-                st.error("No testcases generated")
+                st.error("❌ No testcases generated")
             else:
+                st.success(f"✅ {len(testcases)} testcases generated")
+                st.json(testcases)
+
+                # --- Run Execution ---
                 logs = run_test_cases(testcases, st.session_state.base_url, token=st.session_state.auth_token)
+                st.subheader("📑 Execution Logs")
+                st.json(logs)
+
+                # --- Reporter Task ---
+                report_task = Task(
+                    description=f"Summarize these API test execution results:\n{json.dumps(logs, indent=2)}",
+                    agent=reporter_agent,
+                    expected_output="JSON summary with counts of passed/failed and endpoint breakdown"
+                )
+                report_crew = Crew(
+                    agents=[reporter_agent],
+                    tasks=[report_task],
+                    verbose=True,
+                )
+                report_results = report_crew.kickoff()
+                summary = get_output_safe(report_results.tasks_output[0])
+
+                # --- Final Report ---
                 final_report = {
                     "execution_logs": logs,
-                    "report": results.get("Reporter", "No report generated")
+                    "summary": safe_json_parse(summary) or summary
                 }
                 st.subheader("📊 Final Report")
                 st.json(final_report)
