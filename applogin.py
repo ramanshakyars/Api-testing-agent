@@ -110,6 +110,37 @@ def run_test_cases(testcases: list, base_url: str, token=None):
     client.close()
     return logs
 
+def get_output_safe(task_output):
+    # Works across crewai versions
+    if hasattr(task_output, "output"):
+        return task_output.output
+    if hasattr(task_output, "final_output"):
+        return task_output.final_output
+    return str(task_output)
+
+def print_report_section(report):
+    if isinstance(report, dict):
+        st.write("### 📊 Test Summary")
+        if "summary" in report and isinstance(report["summary"], dict):
+            summary = report["summary"]
+            passed = summary.get("passed", summary.get("num_passed"))
+            failed = summary.get("failed", summary.get("num_failed"))
+            total = summary.get("total", summary.get("num_total"))
+            st.write(f"**Total:** {total if total else 'N/A'}")
+            st.write(f"**Passed:** {passed if passed is not None else 'N/A'}")
+            st.write(f"**Failed:** {failed if failed is not None else 'N/A'}")
+            st.write("**Breakdown by endpoint:**")
+            if "breakdown" in summary:
+                for endpoint, stat in summary["breakdown"].items():
+                    st.write(f"- `{endpoint}`: {stat}")
+            st.write("---")
+        else:
+            st.write(report["summary"])
+        st.write("### 📝 Execution Logs")
+        st.json(report["execution_logs"])
+    else:
+        st.write(report)
+
 # ===========================
 # Streamlit UI
 # ===========================
@@ -125,6 +156,8 @@ if "auth_token" not in st.session_state:
     st.session_state.auth_token = None
 if "login_done" not in st.session_state:
     st.session_state.login_done = False
+if "final_report" not in st.session_state:
+    st.session_state.final_report = None
 
 swagger_url = st.text_input(
     "Enter Swagger/OpenAPI URL", 
@@ -169,93 +202,91 @@ if st.session_state.api_paths:
                     st.error("Login Failed")
 
         # Step 2: Run CrewAI only after login
-        if st.session_state.login_done and st.button("Run API Tests"):
-            # --- Agents ---
-            planner_agent = Agent(
-                role="Planner",
-                goal="Decide execution order for APIs",
-                backstory="Expert at ordering endpoints logically.",
-                llm=ollama_llm
-            )
-            testcase_agent = Agent(
-                role="Testcase Generator",
-                goal="Generate testcases",
-                backstory="Covers positive and negative scenarios.",
-                llm=ollama_llm
-            )
-            reporter_agent = Agent(
-                role="Reporter",
-                goal="Summarize results",
-                backstory="Creates pass/fail reports.",
-                llm=ollama_llm
-            )
+        if st.session_state.login_done:
+            if st.button("Run API Tests"):
+                # --- Agents ---
+                planner_agent = Agent(
+                    role="Planner",
+                    goal="Decide execution order for APIs",
+                    backstory="Expert at ordering endpoints logically.",
+                    llm=ollama_llm
+                )
+                testcase_agent = Agent(
+                    role="Testcase Generator",
+                    goal="Generate testcases",
+                    backstory="Covers positive and negative scenarios.",
+                    llm=ollama_llm
+                )
+                reporter_agent = Agent(
+                    role="Reporter",
+                    goal="Summarize results",
+                    backstory="Creates pass/fail reports.",
+                    llm=ollama_llm
+                )
 
-            # --- Tasks ---
-            plan_task = Task(
-                description=f"Order APIs logically: {st.session_state.api_paths[:20]}",
-                agent=planner_agent,
-                expected_output="Ordered list of APIs"
-            )
-            testcase_task = Task(
-                description="""Generate ONLY JSON testcases:
+                # --- Tasks ---
+                plan_task = Task(
+                    description=f"Order APIs logically: {st.session_state.api_paths[:20]}",
+                    agent=planner_agent,
+                    expected_output="Ordered list of APIs"
+                )
+                testcase_task = Task(
+                    description="""Generate ONLY JSON testcases:
 [
  {"name":"Test","method":"GET","endpoint":"/path","params":{},"data":{},"expected_status":[200]}
 ]""",
-                agent=testcase_agent,
-                context=[plan_task],
-                expected_output="Strict JSON array"
-            )
-
-            # --- Run Planner + Testcase Generator ---
-            crew = Crew(
-                agents=[planner_agent, testcase_agent],
-                tasks=[plan_task, testcase_task],
-                verbose=True,
-            )
-            results = crew.kickoff()
-
-            # --- Collect Outputs ---
-            def get_output_safe(task_output):
-    # Works across crewai versions
-             if hasattr(task_output, "output"):
-                return task_output.output
-             if hasattr(task_output, "final_output"):
-                return task_output.final_output
-             return str(task_output)
-            plan_output = get_output_safe(results.tasks_output[0])
-            testcase_output = get_output_safe(results.tasks_output[1])
-
-            # --- Parse Testcases ---
-            testcases = safe_json_parse(testcase_output)
-            if not testcases:
-                st.error("❌ No testcases generated")
-            else:
-                st.success(f"✅ {len(testcases)} testcases generated")
-                st.json(testcases)
-
-                # --- Run Execution ---
-                logs = run_test_cases(testcases, st.session_state.base_url, token=st.session_state.auth_token)
-                st.subheader("📑 Execution Logs")
-                st.json(logs)
-
-                # --- Reporter Task ---
-                report_task = Task(
-                    description=f"Summarize these API test execution results:\n{json.dumps(logs, indent=2)}",
-                    agent=reporter_agent,
-                    expected_output="JSON summary with counts of passed/failed and endpoint breakdown"
+                    agent=testcase_agent,
+                    context=[plan_task],
+                    expected_output="Strict JSON array"
                 )
-                report_crew = Crew(
-                    agents=[reporter_agent],
-                    tasks=[report_task],
+
+                # --- Run Planner + Testcase Generator ---
+                crew = Crew(
+                    agents=[planner_agent, testcase_agent],
+                    tasks=[plan_task, testcase_task],
                     verbose=True,
                 )
-                report_results = report_crew.kickoff()
-                summary = get_output_safe(report_results.tasks_output[0])
+                results = crew.kickoff()
 
-                # --- Final Report ---
-                final_report = {
-                    "execution_logs": logs,
-                    "summary": safe_json_parse(summary) or summary
-                }
-                st.subheader("📊 Final Report")
-                st.json(final_report)
+                # --- Collect Outputs ---
+                plan_output = get_output_safe(results.tasks_output[0])
+                testcase_output = get_output_safe(results.tasks_output[1])
+
+                # --- Parse Testcases ---
+                testcases = safe_json_parse(testcase_output)
+                if not testcases:
+                    st.error("❌ No testcases generated")
+                else:
+                    st.success(f"✅ {len(testcases)} testcases generated")
+                    st.json(testcases)
+
+                    # --- Run Execution ---
+                    logs = run_test_cases(testcases, st.session_state.base_url, token=st.session_state.auth_token)
+                    st.subheader("📑 Execution Logs")
+                    st.json(logs)
+
+                    # --- Reporter Task ---
+                    report_task = Task(
+                        description=f"Summarize these API test execution results:\n{json.dumps(logs, indent=2)}",
+                        agent=reporter_agent,
+                        expected_output="JSON summary with counts of passed/failed and endpoint breakdown"
+                    )
+                    report_crew = Crew(
+                        agents=[reporter_agent],
+                        tasks=[report_task],
+                        verbose=True,
+                    )
+                    report_results = report_crew.kickoff()
+                    summary = get_output_safe(report_results.tasks_output[0])
+
+                    # --- Final Report ---
+                    final_report = {
+                        "execution_logs": logs,
+                        "summary": safe_json_parse(summary) or summary
+                    }
+                    st.session_state.final_report = final_report
+
+        # Print report on UI if available
+        if st.session_state.final_report:
+            st.subheader("📊 Final Report")
+            print_report_section(st.session_state.final_report)
